@@ -1,0 +1,216 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1779206897051,
+  "projectRoot": "/Users/jaesolshin/Documents/GitHub/lightrag_pg_not_age/lightrag-upstream",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml"
+        ]
+      },
+      {
+        "name": "C/C++",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "Makefile"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "fastapi",
+        "version": null,
+        "category": "backend"
+      },
+      {
+        "name": "pytest",
+        "version": null,
+        "category": "testing"
+      }
+    ],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "make build",
+    "testCommand": "make test",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "assets",
+      "docs",
+      "examples",
+      "scripts",
+      "tests"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "README.assets": {
+      "path": "README.assets",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1779206897044,
+      "keyFiles": [
+        "b2aaf634151b4706892693ffb43d9093.png",
+        "iShot_2025-03-23_12.40.08.png"
+      ]
+    },
+    "assets": {
+      "path": "assets",
+      "purpose": "Static assets",
+      "fileCount": 2,
+      "lastAccessed": 1779206897044,
+      "keyFiles": [
+        "LiteWrite.png",
+        "logo.png"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 15,
+      "lastAccessed": 1779206897045,
+      "keyFiles": [
+        "AdvancedFeatures.md",
+        "Algorithm.md",
+        "AsymmetricEmbedding.md",
+        "DockerDeployment.md",
+        "FrontendBuildGuide.md"
+      ]
+    },
+    "examples": {
+      "path": "examples",
+      "purpose": "Example code",
+      "fileCount": 21,
+      "lastAccessed": 1779206897045,
+      "keyFiles": [
+        "generate_query.py",
+        "graph_visual_with_html.py",
+        "graph_visual_with_neo4j.py",
+        "graph_visual_with_opensearch.py",
+        "insert_custom_kg.py"
+      ]
+    },
+    "k8s-deploy": {
+      "path": "k8s-deploy",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1779206897045,
+      "keyFiles": [
+        "README-zh.md",
+        "README.md",
+        "install_lightrag.sh",
+        "install_lightrag_dev.sh",
+        "uninstall_lightrag.sh"
+      ]
+    },
+    "lightrag": {
+      "path": "lightrag",
+      "purpose": null,
+      "fileCount": 13,
+      "lastAccessed": 1779206897046,
+      "keyFiles": [
+        "__init__.py",
+        "_version.py",
+        "base.py",
+        "constants.py",
+        "exceptions.py"
+      ]
+    },
+    "lightrag_hku.egg-info": {
+      "path": "lightrag_hku.egg-info",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1779206897046,
+      "keyFiles": [
+        "PKG-INFO",
+        "SOURCES.txt",
+        "dependency_links.txt",
+        "entry_points.txt",
+        "requires.txt"
+      ]
+    },
+    "lightrag_webui": {
+      "path": "lightrag_webui",
+      "purpose": null,
+      "fileCount": 14,
+      "lastAccessed": 1779206897046,
+      "keyFiles": [
+        "README.md",
+        "bun.lock",
+        "components.json",
+        "env.development.smaple",
+        "env.local.sample"
+      ]
+    },
+    "reproduce": {
+      "path": "reproduce",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1779206897046,
+      "keyFiles": [
+        "Step_0.py",
+        "Step_1.py",
+        "Step_1_openai_compatible.py",
+        "Step_2.py",
+        "Step_3.py"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1779206897047,
+      "keyFiles": [
+        "test.sh"
+      ]
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 55,
+      "lastAccessed": 1779206897047,
+      "keyFiles": [
+        "README_WORKSPACE_ISOLATION_TESTS.md",
+        "__init__.py",
+        "conftest.py",
+        "test_aquery_data_endpoint.py",
+        "test_asymmetric_embedding.py"
+      ]
+    },
+    "lightrag/api": {
+      "path": "lightrag/api",
+      "purpose": "API routes",
+      "fileCount": 11,
+      "lastAccessed": 1779206897049,
+      "keyFiles": [
+        "__init__.py",
+        "auth.py",
+        "config.py"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
