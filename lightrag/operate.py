@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import json_repair
-from typing import Any, AsyncIterator, overload, Literal
+from typing import Any, AsyncIterator, cast, overload, Literal
 from collections import Counter, defaultdict
 
 from lightrag.exceptions import (
@@ -51,6 +51,7 @@ from lightrag.base import (
     BaseGraphStorage,
     BaseKVStorage,
     BaseVectorStorage,
+    SupportsHybridQuery,
     TextChunkSchema,
     QueryParam,
     QueryResult,
@@ -5160,9 +5161,20 @@ async def _get_node_data(
         f"Query nodes: {query} (top_k:{query_param.top_k}, cosine:{entities_vdb.cosine_better_than_threshold})"
     )
 
-    results = await entities_vdb.query(
-        query, top_k=query_param.top_k, query_embedding=query_embedding
-    )
+    # Negotiate the optional hybrid capability (SupportsHybridQuery): only pass
+    # enable_hybrid to backends that advertise it, so dense-only backends keep
+    # their unchanged query() signature.
+    if getattr(entities_vdb, "supports_hybrid", False) and query_param.enable_hybrid:
+        results = await cast(SupportsHybridQuery, entities_vdb).query(
+            query,
+            top_k=query_param.top_k,
+            query_embedding=query_embedding,
+            enable_hybrid=True,
+        )
+    else:
+        results = await entities_vdb.query(
+            query, top_k=query_param.top_k, query_embedding=query_embedding
+        )
 
     if not len(results):
         return [], []

@@ -7,7 +7,15 @@ import re
 import datetime
 from datetime import timezone
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, TypeVar, Union, final
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    TYPE_CHECKING,
+    TypeVar,
+    Union,
+    final,
+)
 import numpy as np
 import configparser
 import ssl
@@ -33,6 +41,7 @@ from ..base import (
     DocProcessingStatus,
     DocStatus,
     DocStatusStorage,
+    SupportsHybridQuery,
 )
 from ..constants import DEFAULT_QUERY_PRIORITY
 from ..exceptions import DataMigrationError
@@ -3265,13 +3274,26 @@ class _PendingPGVectorDoc:
 
 
 @final
+def _pg_hybrid_enabled() -> bool:
+    """Whether Postgres hybrid (dense + lexical) search is enabled for this
+    deployment. Opt-in, default OFF: when off, no ``entity_name_tsv`` column or
+    GIN index is created and ``query()`` stays dense-only, so existing non-hybrid
+    deployments are unaffected (no table rewrite, no extra index)."""
+    return os.environ.get("POSTGRES_HYBRID_ENABLED", "false").lower() == "true"
+
+
 @dataclass
 class PGVectorStorage(BaseVectorStorage):
     db: PostgreSQLDB | None = field(default=None)
+    # Reference impl of the SupportsHybridQuery contract (base.py). The capability
+    # is opt-in per deployment via POSTGRES_HYBRID_ENABLED (default off) so a
+    # non-hybrid deployment creates no hybrid schema; resolved in __post_init__.
+    supports_hybrid: bool = field(default=False, init=False)
 
     def __post_init__(self):
         validate_workspace(self.workspace)
         self._validate_embedding_func()
+        self.supports_hybrid = _pg_hybrid_enabled()
         self._max_batch_size = self.global_config["embedding_batch_num"]
         # DB-write batching limits (distinct from the embedding batch size above).
         (
@@ -3325,6 +3347,35 @@ class PGVectorStorage(BaseVectorStorage):
         self._pending_vector_deletes: set[str] = set()
         # Namespace-keyed lock; created in initialize() after workspace is final.
         self._flush_lock = None
+
+    @staticmethod
+    async def _ensure_entity_hybrid_index(
+        db: PostgreSQLDB, table_name: str, base_table: str
+    ) -> None:
+        """Idempotently add the generated ``entity_name_tsv`` column + GIN index
+        used for hybrid (dense + lexical) entity search. No-op for non-entity
+        tables. Must run for BOTH newly-created and pre-existing entity tables
+        (called from ``_pg_create_table`` and ``setup_table``) so an upgraded
+        deployment gets the column instead of failing at query time when a
+        caller opts into ``query(enable_hybrid=True)``.
+        """
+        if base_table != "LIGHTRAG_VDB_ENTITY" or not _pg_hybrid_enabled():
+            return
+        try:
+            await db.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS "
+                "entity_name_tsv tsvector GENERATED ALWAYS AS "
+                "(to_tsvector('simple', entity_name)) STORED"
+            )
+            tsv_index_name = _safe_index_name(table_name, "entity_name_tsv")
+            await db.execute(
+                f"CREATE INDEX IF NOT EXISTS {tsv_index_name} ON {table_name} "
+                "USING gin(entity_name_tsv)"
+            )
+        except Exception as e:
+            logger.error(
+                f"PostgreSQL, Failed to ensure hybrid tsvector column/index on {table_name}, Got: {e}"
+            )
 
     @staticmethod
     async def _pg_create_table(
@@ -3390,6 +3441,11 @@ class PGVectorStorage(BaseVectorStorage):
             logger.error(
                 f"PostgreSQL, Failed to create composite index {workspace_id_index_name}, Got: {e}"
             )
+
+        # Hybrid entity search (entities table only): idempotently add the
+        # generated tsvector column + GIN index. Also invoked from setup_table
+        # for pre-existing tables so upgraded deployments get it.
+        await PGVectorStorage._ensure_entity_hybrid_index(db, table_name, base_table)
 
     @staticmethod
     async def _pg_migrate_workspace_data(
@@ -3551,6 +3607,13 @@ class PGVectorStorage(BaseVectorStorage):
             new_table_exists and (table_name.lower() == legacy_table_name.lower())
         ):
             await db._create_vector_index(table_name, embedding_dim)
+
+            # Existing table: ensure the hybrid tsvector column/index exists too,
+            # so an upgraded deployment (table already created) can opt into
+            # query(enable_hybrid=True) without hitting a missing column.
+            await PGVectorStorage._ensure_entity_hybrid_index(
+                db, table_name, base_table
+            )
 
             workspace_count_query = (
                 f"SELECT COUNT(*) as count FROM {table_name} WHERE workspace = $1"
@@ -4255,7 +4318,12 @@ class PGVectorStorage(BaseVectorStorage):
 
     #################### query method ###############
     async def query(
-        self, query: str, top_k: int, query_embedding: list[float] = None
+        self,
+        query: str,
+        top_k: int,
+        query_embedding: list[float] = None,
+        *,
+        enable_hybrid: bool = False,
     ) -> list[dict[str, Any]]:
         if query_embedding is not None:
             embedding = query_embedding
@@ -4273,7 +4341,16 @@ class PGVectorStorage(BaseVectorStorage):
             if getattr(self.db, "vector_index_type", None) == "HNSW_HALFVEC"
             else "vector"
         )
-        sql = SQL_TEMPLATES[self.namespace].format(
+        # Opt-in is a per-query flag (in full integration sourced from
+        # query_param.enable_hybrid at the operate.py call site, exactly like
+        # enable_rerank) — not a global/env toggle.
+        use_hybrid = (
+            enable_hybrid
+            and self.supports_hybrid
+            and is_namespace(self.namespace, NameSpace.VECTOR_STORE_ENTITIES)
+        )
+        template_key = "entities_hybrid" if use_hybrid else self.namespace
+        sql = SQL_TEMPLATES[template_key].format(
             table_name=self.table_name, vector_cast=vector_cast
         )
         params = {
@@ -4282,6 +4359,8 @@ class PGVectorStorage(BaseVectorStorage):
             "top_k": top_k,
             "embedding": embedding,
         }
+        if use_hybrid:
+            params["query_text"] = query
         results = await self.db.query(sql, params=list(params.values()), multirows=True)
         return results
 
@@ -8378,6 +8457,40 @@ SQL_TEMPLATES = {
                 ORDER BY content_vector <=> $4::{vector_cast}
                 LIMIT $3;
                 """,
+    # Experimental hybrid (dense + lexical) entity search, RRF-fused (k=60).
+    # Dense leg mirrors the "entities" template (threshold-filtered cosine
+    # distance); lexical leg matches entity_name_tsv via plainto_tsquery and
+    # is NOT threshold-filtered, so lexical-only hits (e.g. rare jargon whose
+    # embedding falls outside the cosine threshold) still surface. Same
+    # result contract as "entities": (entity_name, created_at).
+    "entities_hybrid": """
+                WITH dense AS (
+                    SELECT id, entity_name, create_time,
+                           ROW_NUMBER() OVER (ORDER BY content_vector <=> $4::{vector_cast}) AS rnk
+                    FROM {table_name}
+                    WHERE workspace = $1
+                      AND content_vector <=> $4::{vector_cast} < $2
+                    ORDER BY content_vector <=> $4::{vector_cast}
+                    LIMIT $3
+                ),
+                lexical AS (
+                    SELECT id, entity_name, create_time,
+                           ROW_NUMBER() OVER (ORDER BY ts_rank_cd(entity_name_tsv, plainto_tsquery('simple', $5)) DESC) AS rnk
+                    FROM {table_name}
+                    WHERE workspace = $1
+                      AND entity_name_tsv @@ plainto_tsquery('simple', $5)
+                    ORDER BY ts_rank_cd(entity_name_tsv, plainto_tsquery('simple', $5)) DESC
+                    LIMIT $3
+                )
+                SELECT COALESCE(dense.entity_name, lexical.entity_name) AS entity_name,
+                       EXTRACT(EPOCH FROM COALESCE(dense.create_time, lexical.create_time))::BIGINT AS created_at,
+                       (COALESCE(1.0 / (60 + dense.rnk), 0.0)
+                        + COALESCE(1.0 / (60 + lexical.rnk), 0.0)) AS rrf_score
+                FROM dense
+                FULL OUTER JOIN lexical ON dense.id = lexical.id
+                ORDER BY rrf_score DESC
+                LIMIT $3;
+                """,
     "chunks": """
               SELECT id,
                      content,
@@ -8394,3 +8507,10 @@ SQL_TEMPLATES = {
         DELETE FROM {table_name} WHERE workspace=$1
        """,
 }
+
+
+if TYPE_CHECKING:
+    # Static conformance check: the reference implementation satisfies the
+    # SupportsHybridQuery capability contract (see lightrag/base.py). Fails type
+    # checking if PGVectorStorage drifts from the contract.
+    _hybrid_contract_check: type[SupportsHybridQuery] = PGVectorStorage

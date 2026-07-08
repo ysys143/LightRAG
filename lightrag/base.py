@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 from dataclasses import dataclass, field
 from typing import (
     Any,
+    ClassVar,
     Literal,
+    Protocol,
     TypedDict,
     TypeVar,
     Optional,
@@ -150,6 +152,12 @@ class QueryParam:
     Default is True to enable reranking when rerank model is available.
     """
 
+    enable_hybrid: bool = os.getenv("HYBRID_BY_DEFAULT", "false").lower() == "true"
+    """Enable native hybrid (dense + lexical) entity seeding on vector stores that
+    advertise ``supports_hybrid`` (see SupportsHybridQuery). No effect on
+    dense-only backends. Default False.
+    """
+
     include_references: bool = False
     """If True, includes reference list in the response for supported endpoints.
     This parameter controls whether the API response includes a references field
@@ -216,11 +224,57 @@ class StorageNameSpace(ABC):
         """
 
 
+class SupportsHybridQuery(Protocol):
+    """Optional capability contract for a vector store that fuses dense + lexical
+    retrieval *natively* (server-side), instead of the application maintaining a
+    separate keyword index and fusing in Python.
+
+    A backend advertises the capability with ``supports_hybrid = True`` and honors
+    an ``enable_hybrid`` opt-in on ``query()``:
+
+      - Lexical leg uses the raw ``query`` text, tokenized and scored by the engine
+        itself (Postgres ``tsvector``; Lucene/Tantivy in OpenSearch/Mongo/Milvus;
+        Qdrant full-text/BM25) — no client-computed sparse vector required.
+      - Dense leg uses ``query_embedding`` exactly as today.
+      - The two legs are fused by the engine's native mechanism (SQL RRF,
+        ``RRFRanker``, normalization pipeline, ``$rankFusion``, ...).
+      - The result keeps the dense query's keys (a capable backend may add a
+        diagnostic fusion score, e.g. ``rrf_score``), so callers stay agnostic to
+        which leg produced a hit.
+
+    Callers negotiate on the flag value (never assume the capability)::
+
+        if getattr(vdb, "supports_hybrid", False) and query_param.enable_hybrid:
+            results = await vdb.query(text, top_k, emb, enable_hybrid=True)
+        else:
+            results = await vdb.query(text, top_k, emb)      # dense-only, unchanged
+
+    Backends without a native engine (e.g. NanoVectorDB, FAISS) simply leave
+    ``supports_hybrid = False``; an in-process shim may implement this behind their
+    own ``query()`` if desired, but it is never a separate storage role.
+    """
+
+    supports_hybrid: bool
+
+    async def query(
+        self,
+        query: str,
+        top_k: int,
+        query_embedding: list[float] | None = None,
+        *,
+        enable_hybrid: bool = False,
+    ) -> list[dict[str, Any]]: ...
+
+
 @dataclass
 class BaseVectorStorage(StorageNameSpace, ABC):
     embedding_func: EmbeddingFunc
     cosine_better_than_threshold: float = field(default=0.2)
     meta_fields: set[str] = field(default_factory=set)
+
+    # Capability flag for the SupportsHybridQuery contract above. Default False
+    # (dense-only); backends that fuse dense + lexical natively override to True.
+    supports_hybrid: ClassVar[bool] = False
 
     def _validate_embedding_func(self):
         """Validate that embedding_func is provided.
@@ -275,6 +329,12 @@ class BaseVectorStorage(StorageNameSpace, ABC):
             top_k: Number of top results to return
             query_embedding: Optional pre-computed embedding for the query.
                            If provided, skips embedding computation for better performance.
+
+        Backends that advertise ``supports_hybrid = True`` additionally accept a
+        keyword-only ``enable_hybrid: bool = False`` argument and, when it is set,
+        fuse a native lexical leg with the dense search (see SupportsHybridQuery).
+        Dense-only backends keep this signature unchanged; callers pass
+        ``enable_hybrid`` only after negotiating on the ``supports_hybrid`` flag.
         """
 
     @abstractmethod
